@@ -22,6 +22,26 @@ void do_sleep(sleep_type type, int timeout)
 {
     switch (type)
     {
+
+        case sleep_type::syscall_poll_0:
+            poll(NULL, 0, timeout);
+            break;
+
+        case sleep_type::syscall_poll:
+        {
+            pollfd pf = { -1, 0, 0 };
+            poll(&pf, 1, timeout);
+        }
+        break;
+
+        case sleep_type::syscall_nanosleep:
+#if defined(LIBGO_SYS_Unix)
+        {
+            timespec tv{ timeout / 1000, ((long int)timeout % 1000) * 1000000 };
+            nanosleep(&tv, NULL);
+        }
+        break;
+#endif
         case sleep_type::syscall_sleep:
             sleep(timeout / 1000);
             break;
@@ -30,34 +50,19 @@ void do_sleep(sleep_type type, int timeout)
             usleep(timeout * 1000);
             break;
 
-        case sleep_type::syscall_nanosleep:
-            {
-                timespec tv{timeout / 1000, ((long int)timeout % 1000) * 1000000};
-                nanosleep(&tv, NULL);
-            }
-            break;
-
-        case sleep_type::syscall_poll_0:
-            poll(NULL, 0, timeout);
-            break;
-
-        case sleep_type::syscall_poll:
-            pollfd pf = {-1, 0, 0};
-            poll(&pf, 1, timeout);
-            break;
     }
 }
 
 using ::testing::TestWithParam;
 using ::testing::Values;
 
-struct Sleep : public TestWithParam<sleep_type>
+struct Sleep1 : public TestWithParam<sleep_type>
 {
     sleep_type type_;
     void SetUp() { type_ = GetParam(); }
 };
 
-TEST_P(Sleep, sleep0)
+TEST_P(Sleep1, sleep0)
 {
 //    co_opt.debug = dbg_timer;
 
@@ -75,7 +80,7 @@ TEST_P(Sleep, sleep0)
 //    co_opt.debug = 0;
 }
 
-TEST_P(Sleep, sleep1)
+TEST_P(Sleep1, sleep1)
 {
     int c = 0, n = 2;
     for (int i = 0; i < n; ++i)
@@ -89,8 +94,16 @@ TEST_P(Sleep, sleep1)
     TIMER_CHECK(gt, 1000, 100);
 }
 
+#if defined(LIBGO_SYS_Unix)
 INSTANTIATE_TEST_CASE_P(
         SleepTypeTest,
-        Sleep,
-        Values(sleep_type::syscall_sleep, sleep_type::syscall_usleep, sleep_type::syscall_nanosleep,
-            sleep_type::syscall_poll_0, sleep_type::syscall_poll));
+        Sleep1,
+        Values(sleep_type::syscall_sleep, sleep_type::syscall_usleep, sleep_type::syscall_nanosleep
+            , sleep_type::syscall_poll_0, sleep_type::syscall_poll
+        ));
+#else
+INSTANTIATE_TEST_CASE_P(
+    SleepTypeTest,
+    Sleep1,
+    Values(sleep_type::syscall_sleep, sleep_type::syscall_usleep));
+#endif
