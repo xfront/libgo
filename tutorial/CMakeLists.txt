@@ -37,13 +37,12 @@ endif()
 
 include(${PROJECT_SOURCE_DIR}/boost.cmake)
 
-#find_package(CURL REQUIRED)
-#target_link_libraries(main PRIVATE ${CURL_LIBRARIES})
-#include_directories(main PRIVATE ${CURL_INCLUDE_DIRS})
+
+hunter_add_package(CURL)
+find_package(CURL CONFIG REQUIRED)
 
 include_directories(${PROJECT_SOURCE_DIR}/..)
 include_directories(${PROJECT_SOURCE_DIR}/../libgo)
-link_directories(${PROJECT_SOURCE_DIR}/../build)
 
 aux_source_directory(${PROJECT_SOURCE_DIR} SRC_LIST)
 
@@ -55,11 +54,11 @@ foreach(var ${SRC_LIST})
     if (WIN32)
         set_target_properties(${tgt}.t PROPERTIES COMPILE_FLAGS "/wd4819 /wd4267")
         set_target_properties(${tgt}.t PROPERTIES INSTALL_RPATH ${PROJECT_SOURCE_DIR}/../../build)
-        set(LINK_ARGS libgo ${Boost_LIBRARIES} ws2_32 rt)
+        set(LINK_ARGS libgo Boost::boost Boost::system ws2_32 rt)
     elseif (UNIX)
-        set(LINK_ARGS libgo curl ${Boost_LIBRARIES} pthread dl)
+        set(LINK_ARGS libgo CURL::libcurl Boost::boost Boost::system pthread dl)
     endif()
-    target_link_libraries(${tgt}.t ${LINK_ARGS})
+    target_link_libraries(${tgt}.t PUBLIC ${LINK_ARGS})
 
     #    add_executable(s_${tgt}.t ${var})
     #    if (WIN32)

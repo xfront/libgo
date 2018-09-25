@@ -1,14 +1,17 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.9)
 
+include(HunterGate.cmake)
+HunterGate(
+        URL "https://github.com/ruslo/hunter/archive/v0.23.25.tar.gz"
+        SHA1 "cb75cce9a3a8d552e70e7118f3203eb4ac05c201"
+)
 ###################################################################################
 project(libgo)
 
 enable_language(C ASM)
 
-if (CMAKE_BUILD_TYPE)
-else()
+if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RELEASE)
-    #set(CMAKE_BUILD_TYPE DEBUG)
 endif()
 
 message("------------ Options -------------")
@@ -43,6 +46,14 @@ if (BUILD_DYNAMIC)
     message ("  build dynamic lib: yes")
 else()
     message ("  build dynamic lib: no")
+endif()
+
+if (BUILD_TEST)
+    message ("  build test: yes")
+
+    add_subdirectory(tutorial)
+else()
+    message ("  build test: no")
 endif()
 
 message("-------------- Env ---------------")
@@ -95,28 +106,20 @@ if (NOT DISABLE_HOOK)
 endif()
 
 set(TARGET "libgo")
-set(STATIC_T "libgo_static")
 set(STATIC_HOOK "static_hook")
 
 list(APPEND CO_SRC_LIST ${jump_asm_file})
 list(APPEND CO_SRC_LIST ${make_asm_file})
-add_library("${STATIC_T}" STATIC ${CO_SRC_LIST})
-set_target_properties("${STATIC_T}" PROPERTIES OUTPUT_NAME "${TARGET}")
+
+if (BUILD_DYNAMIC)
+    add_library("${TARGET}" SHARED  ${CO_SRC_LIST})
+else()
+    add_library("${TARGET}" STATIC ${CO_SRC_LIST})
+endif()
 
 if (UNIX)
-    install(TARGETS ${STATIC_T} LIBRARY DESTINATION "lib" ARCHIVE DESTINATION "lib")
-    install(DIRECTORY ${PROJECT_SOURCE_DIR}/libgo/ DESTINATION "include/libgo" FILES_MATCHING PATTERN "*.h")
-        #PATTERN "windows" EXCLUDE
-
+    #PATTERN "windows" EXCLUDE
     add_library("${STATIC_HOOK}" STATIC "${PROJECT_SOURCE_DIR}/libgo/netio/unix/static_hook/static_hook.cpp")
-
-    if (BUILD_DYNAMIC)
-        set(SHARED_T "libgo_dynamic")
-        add_library("${SHARED_T}" SHARED ${CO_SRC_LIST})
-        set_target_properties("${SHARED_T}" PROPERTIES OUTPUT_NAME "${TARGET}")
-        target_link_libraries("${SHARED_T}" ${LINK_LIBS} -ldl)
-        install(TARGETS ${SHARED_T} LIBRARY DESTINATION "lib" ARCHIVE DESTINATION "lib")
-    endif()
 
     add_custom_target(debug
         COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=DEBUG ${CMAKE_SOURCE_DIR}
@@ -148,7 +151,10 @@ if (UNIX)
     )
 
 elseif (WIN32)
-    set_target_properties("${STATIC_T}" PROPERTIES COMPILE_FLAGS "/wd4819 /wd4267")
+    set_target_properties("${TARGET}" PROPERTIES COMPILE_FLAGS "/wd4819 /wd4267")
 endif()
+
+install(TARGETS ${STATIC_T} LIBRARY DESTINATION "lib" ARCHIVE DESTINATION "lib")
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/libgo/ DESTINATION "include/libgo" FILES_MATCHING PATTERN "*.h")
 
 #add_subdirectory(${PROJECT_SOURCE_DIR}/libgo/main)
