@@ -126,10 +126,10 @@ public:
 
 int main(int argc, char** argv) {
     CoListenerSample listener;
-
+#if ENABLE_DEBUGGER
     //设置协程监听器，如果设置为NULL则为取消监听
     co::Listener::SetTaskListener(&listener);
-
+#endif
     //将异常的处理方式置为使用listener处理
     co_opt.exception_handle = co::eCoExHandle::on_listener;
 
