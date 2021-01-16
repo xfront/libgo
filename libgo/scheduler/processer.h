@@ -3,6 +3,10 @@
 #include "../common/clock.h"
 #include "../task/task.h"
 #include "../common/ts_queue.h"
+
+#if ENABLE_DEBUGGER
+#include "../debug/listener.h"
+#endif
 #include <condition_variable>
 #include <mutex>
 #include <atomic>
@@ -50,11 +54,9 @@ private:
     TaskQueue newQueue_;
 
     // 等待的条件变量
-    std::mutex cvMutex_;
-    std::condition_variable cv_;
+    std::condition_variable_any cv_;
     std::atomic_bool waiting_{false};
-
-    std::shared_ptr<bool> stop_;
+    bool notified_ = false;
 
     static int s_check_;
 
@@ -64,6 +66,8 @@ public:
     static Processer* & GetCurrentProcesser();
 
     static Scheduler* GetCurrentScheduler();
+
+    inline Scheduler* GetScheduler() { return scheduler_; }
 
     // 获取当前正在执行的协程
     static Task* GetCurrentTask();
@@ -85,6 +89,12 @@ public:
             return lhs.tk_ == rhs.tk_ && lhs.id_ == rhs.id_;
         }
 
+        friend bool operator<(SuspendEntry const& lhs, SuspendEntry const& rhs) {
+            if (lhs.id_ == rhs.id_)
+                return lhs.tk_ < rhs.tk_;
+            return lhs.id_ < rhs.id_;
+        }
+
         bool IsExpire() const {
             return Processer::IsExpire(*this);
         }
@@ -95,9 +105,10 @@ public:
 
     // 挂起当前协程, 并在指定时间后自动唤醒
     static SuspendEntry Suspend(FastSteadyClock::duration dur);
+    static SuspendEntry Suspend(FastSteadyClock::time_point timepoint);
 
     // 唤醒协程
-    static bool Wakeup(SuspendEntry const& entry);
+    static bool Wakeup(SuspendEntry const& entry, std::function<void()> const& functor = NULL);
 
     // 测试一个SuspendEntry是否还可能有效
     static bool IsExpire(SuspendEntry const& entry);
@@ -114,13 +125,13 @@ private:
     ALWAYS_INLINE void CoYield();
 
     // 新创建、阻塞后触发的协程add进来
-    void AddTaskRunnable(Task *tk);
+    void AddTask(Task *tk);
 
     // 调度
     void Process();
 
     // 偷来的协程add进来
-    void AddTaskRunnable(SList<Task> && slist);
+    void AddTask(SList<Task> && slist);
 
     void NotifyCondition();
 
@@ -150,7 +161,7 @@ private:
 
     SuspendEntry SuspendBySelf(Task* tk);
 
-    bool WakeupBySelf(IncursivePtr<Task> const& tkPtr, uint64_t id);
+    bool WakeupBySelf(IncursivePtr<Task> const& tkPtr, uint64_t id, std::function<void()> const& functor);
 };
 
 ALWAYS_INLINE void Processer::StaticCoYield()

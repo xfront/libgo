@@ -7,9 +7,6 @@
 #include <time.h>
 #include "ref.h"
 #include <thread>
-#if WITH_SAFE_SIGNAL
-#include "hook_signal.h"
-#endif
 
 namespace co
 {
@@ -20,20 +17,58 @@ inline atomic_t<unsigned long long> & GetTaskIdFactory()
     return factory;
 }
 
+std::mutex& ExitListMtx()
+{
+    static std::mutex mtx;
+    return mtx;
+}
+std::vector<std::function<void()>>* ExitList()
+{
+    static std::vector<std::function<void()>> *vec = new std::vector<std::function<void()>>;
+    return vec;
+}
+
+static void onExit(void) {
+    auto vec = ExitList();
+    for (auto fn : *vec) {
+        fn();
+    }
+    vec->clear();
+//    return 0;
+}
+
+static int InitOnExit() {
+    atexit(&onExit);
+    return 0;
+}
+
+bool& Scheduler::IsExiting() {
+    static bool exiting = false;
+    return exiting;
+}
+
 Scheduler* Scheduler::Create()
 {
-    return new Scheduler;
+    static int ignore = InitOnExit();
+    (void)ignore;
+
+    Scheduler* sched = new Scheduler;
+    std::unique_lock<std::mutex> lock(ExitListMtx());
+    auto vec = ExitList();
+    vec->push_back([=] { delete sched; });
+    return sched;
 }
 
 Scheduler::Scheduler()
 {
     LibgoInitialize();
-    stop_.reset(new bool(false));
     processers_.push_back(new Processer(this, 0));
 }
 
 Scheduler::~Scheduler()
 {
+    IsExiting() = true;
+    Stop();
 }
 
 void Scheduler::CreateTask(TaskF const& fn, TaskOpt const& opt)
@@ -46,14 +81,14 @@ void Scheduler::CreateTask(TaskF const& fn, TaskOpt const& opt)
     TaskRefLocation(tk).Init(opt.file_, opt.lineno_);
     ++taskCount_;
 
-    DebugPrint(dbg_task, "task(%s) created.", TaskDebugInfo(tk));
+    DebugPrint(dbg_task, "task(%s) created in scheduler(%p).", TaskDebugInfo(tk), (void*)this);
 #if ENABLE_DEBUGGER
     if (Listener::GetTaskListener()) {
         Listener::GetTaskListener()->onCreated(tk->id_);
     }
 #endif
 
-    AddTaskRunnable(tk);
+    AddTask(tk);
 }
 
 void Scheduler::DeleteTask(RefObject* tk, void* arg)
@@ -96,10 +131,11 @@ void Scheduler::Start(int minThreadNumber, int maxThreadNumber)
     // 唤醒协程的定时器线程
     if (timer_) {
         timer_->SetPoolSize(1000, 100);
-        std::thread([this]{ 
+        std::thread t([this]{ 
                 DebugPrint(dbg_thread, "Start alone timer(sched=%p) thread id: %lu", (void*)this, NativeThreadID());
                 this->timer_->ThreadRun(); 
-            }).detach();
+            });
+        timerThread_.swap(t);
     }
 
     // 调度线程
@@ -109,7 +145,7 @@ void Scheduler::Start(int minThreadNumber, int maxThreadNumber)
                 DebugPrint(dbg_thread, "Start dispatcher(sched=%p) thread id: %lu", (void*)this, NativeThreadID());
                 this->DispatcherThread();
                 });
-        t.detach();
+        dispatchThread_.swap(t);
     } else {
         DebugPrint(dbg_scheduler, "---> No DispatcherThread");
     }
@@ -119,25 +155,43 @@ void Scheduler::Start(int minThreadNumber, int maxThreadNumber)
     DebugPrint(dbg_scheduler, "Scheduler::Start minThreadNumber_=%d, maxThreadNumber_=%d", minThreadNumber_, maxThreadNumber_);
     mainProc->Process();
 }
+void Scheduler::goStart(int minThreadNumber, int maxThreadNumber)
+{
+    std::thread([=]{ this->Start(minThreadNumber, maxThreadNumber); }).detach();
+}
 void Scheduler::Stop()
 {
-    *stop_ = true;
+    std::unique_lock<std::mutex> lock(stopMtx_);
+
+    if (stop_) return;
+
+    stop_ = true;
     size_t n = processers_.size();
     for (size_t i = 0; i < n; ++i) {
         auto p = processers_[i];
         if (p)
             p->NotifyCondition();
     }
+
+    if (timer_) timer_->Stop();
+
+    if (dispatchThread_.joinable())
+        dispatchThread_.join();
+
+    if (timerThread_.joinable())
+        timerThread_.join();
 }
 void Scheduler::UseAloneTimerThread()
 {
     TimerType * timer = new TimerType;
 
     if (!started_.try_lock()) {
-        std::thread([this, timer]{ 
+        timer->SetPoolSize(1000, 100);
+        std::thread t([this, timer]{ 
                 DebugPrint(dbg_thread, "Start alone timer(sched=%p) thread id: %lu", (void*)this, NativeThreadID());
                 timer->ThreadRun(); 
-                }).detach();
+                });
+        timerThread_.swap(t);
     } else {
         started_.unlock();
     }
@@ -147,12 +201,19 @@ void Scheduler::UseAloneTimerThread()
 }
 
 static Scheduler::TimerType& staticGetTimer() {
-    static Scheduler::TimerType timer;
-    std::thread([&]{ 
+    static Scheduler::TimerType *ptimer = new Scheduler::TimerType;
+    std::thread *pt = new std::thread([=]{ 
             DebugPrint(dbg_thread, "Start global timer thread id: %lu", NativeThreadID());
-            timer.ThreadRun(); 
-            }).detach();
-    return timer;
+            ptimer->ThreadRun();
+            });
+    std::unique_lock<std::mutex> lock(ExitListMtx());
+    auto vec = ExitList();
+    vec->push_back([=] {
+            ptimer->Stop();
+            if (pt->joinable())
+                pt->join();
+        });
+    return *ptimer;
 }
 
 Scheduler::TimerType & Scheduler::StaticGetTimer() {
@@ -176,7 +237,7 @@ void Scheduler::DispatcherThread()
 {
     DebugPrint(dbg_scheduler, "---> Start DispatcherThread");
     typedef std::size_t idx_t;
-    for (;;) {
+    while (!stop_) {
         // TODO: 用condition_variable降低cpu使用率
         std::this_thread::sleep_for(std::chrono::microseconds(CoroutineOptions::getInstance().dispatcher_thread_cycle_us));
 
@@ -267,11 +328,11 @@ void Scheduler::DispatcherThread()
                         break;
 
                     auto p = processers_[it->second];
-                    p->AddTaskRunnable(std::move(in));
+                    p->AddTask(std::move(in));
                     newActives.insert(ActiveMap::value_type{p->RunnableSize(), it->second});
                 }
                 if (!tasks.empty())
-                    processers_[range.first->second]->AddTaskRunnable(std::move(tasks));
+                    processers_[range.first->second]->AddTask(std::move(tasks));
 
                 for (auto it = range.first; it != range.second; ++it) {
                     auto p = processers_[it->second];
@@ -291,7 +352,10 @@ void Scheduler::DispatcherThread()
             }
 
             auto maxP = processers_[actives.rbegin()->second];
-            std::size_t stealN = std::min(maxP->RunnableSize() / 2, waitN * 1024);
+            std::size_t stealN = (std::min)(maxP->RunnableSize() / 2, waitN * 1024);
+            if (!stealN)
+                continue;
+
             auto tasks = maxP->Steal(stealN);
             if (tasks.empty())
                 continue;
@@ -306,26 +370,26 @@ void Scheduler::DispatcherThread()
                     break;
 
                 auto p = processers_[it->second];
-                p->AddTaskRunnable(std::move(in));
+                p->AddTask(std::move(in));
             }
             if (!tasks.empty())
-                processers_[range.first->second]->AddTaskRunnable(std::move(tasks));
+                processers_[range.first->second]->AddTask(std::move(tasks));
         }
     }
 }
 
-void Scheduler::AddTaskRunnable(Task* tk)
+void Scheduler::AddTask(Task* tk)
 {
     DebugPrint(dbg_scheduler, "Add task(%s) to runnable list.", tk->DebugInfo());
     auto proc = tk->proc_;
     if (proc && proc->active_) {
-        proc->AddTaskRunnable(tk);
+        proc->AddTask(tk);
         return ;
     }
 
     proc = Processer::GetCurrentProcesser();
-    if (proc && proc->active_) {
-        proc->AddTaskRunnable(tk);
+    if (proc && proc->active_ && proc->GetScheduler() == this) {
+        proc->AddTask(tk);
         return ;
     }
 
@@ -337,7 +401,7 @@ void Scheduler::AddTaskRunnable(Task* tk)
         if (proc && proc->active_)
             break;
     }
-    proc->AddTaskRunnable(tk);
+    proc->AddTask(tk);
 }
 
 uint32_t Scheduler::TaskCount()
@@ -363,33 +427,5 @@ void Scheduler::SetCurrentTaskDebugInfo(std::string const& info)
     if (!tk) return ;
     TaskRefDebugInfo(tk) = info;
 }
-
-//bool Scheduler::CancelTimer(TimerId timer_id)
-//{
-//    bool ok = timer_mgr_.Cancel(timer_id);
-//    DebugPrint(dbg_timer, "cancel timer %llu %s", (long long unsigned)timer_id->GetId(),
-//            ok ? "success" : "failed");
-//    return ok;
-//}
-//
-//bool Scheduler::BlockCancelTimer(TimerId timer_id)
-//{
-//    bool ok = timer_mgr_.BlockCancel(timer_id);
-//    DebugPrint(dbg_timer, "block_cancel timer %llu %s", (long long unsigned)timer_id->GetId(),
-//            ok ? "success" : "failed");
-//    return ok;
-//}
-//
-//ThreadPool& Scheduler::GetThreadPool()
-//{
-//    if (!thread_pool_) {
-//        std::unique_lock<LFLock> lock(thread_pool_init_);
-//        if (!thread_pool_) {
-//            thread_pool_ = new ThreadPool;
-//        }
-//    }
-//
-//    return *thread_pool_;
-//}
 
 } //namespace co

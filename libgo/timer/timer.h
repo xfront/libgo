@@ -20,6 +20,8 @@ class CoTimer {
         explicit CoTimerImpl(FastSteadyClock::duration precision);
         ~CoTimerImpl();
 
+        void BindScheduler(Scheduler* scheduler);
+
         TimerId ExpireAt(FastSteadyClock::duration dur, func_t const& cb);
 
         void RunInCoroutine();
@@ -34,7 +36,11 @@ class CoTimer {
 
         Channel<void> trigger_{1};
 
+        Channel<void> quit_{1};
+
         volatile bool terminate_ = false;
+
+        Scheduler* scheduler_ = nullptr;
     };
 
 public:

@@ -31,7 +31,7 @@
 #elif defined(__linux__)
 # define LIBGO_SYS_Linux 1
 # define LIBGO_SYS_Unix 1
-#elif defined(WIN32)
+#elif defined(_WIN32)
 # define LIBGO_SYS_Windows 1
 #endif
 
@@ -46,8 +46,13 @@
 # define ALWAYS_INLINE inline
 #endif
 
-#define LIKELY(x) __builtin_expect(!!(x), 1)
-#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#if defined(LIBGO_SYS_Unix)
+# define LIKELY(x) __builtin_expect(!!(x), 1)
+# define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+# define LIKELY(x) x
+# define UNLIKELY(x) x
+#endif
 
 #if defined(LIBGO_SYS_Linux)
 # define ATTRIBUTE_WEAK __attribute__((weak))
@@ -55,9 +60,24 @@
 # define ATTRIBUTE_WEAK __attribute__((weak_import))
 #endif
 
+#if defined(LIBGO_SYS_Windows)
+#pragma warning(disable : 4996)
+#endif
+
+#if defined(LIBGO_SYS_Windows)
+# define FCONTEXT_CALL __stdcall
+#else
+# define FCONTEXT_CALL
+#endif
+
 #if defined(LIBGO_SYS_Unix)
 #include <unistd.h>
 #include <sys/types.h>
+#endif
+
+#if defined(LIBGO_SYS_Windows)
+#include <Winsock2.h>
+#include <Windows.h>
 #endif
 
 namespace co
@@ -130,7 +150,7 @@ struct CoroutineOptions
     bool enable_coro_stat = false;
 
     // 单协程执行超时时长(单位：微秒) (超过时长会强制steal剩余任务, 派发到其他线程)
-    uint32_t cycle_timeout_us = 10 * 1000; 
+    uint32_t cycle_timeout_us = 100 * 1000; 
 
     // 调度线程的触发频率(单位：微秒)
     uint32_t dispatcher_thread_cycle_us = 1000; 
@@ -156,27 +176,45 @@ struct CoroutineOptions
 
 int GetCurrentProcessID();
 int GetCurrentThreadID();
-std::string GetCurrentTime();
+int GetCurrentCoroID();
+std::string GetCurrentTimeStr();
 const char* BaseFile(const char* file);
 const char* PollEvent2Str(short int event);
 unsigned long NativeThreadID();
-std::string Format(const char* fmt, ...) __attribute__((format(printf,1,2)));
-std::string P(const char* fmt, ...) __attribute__((format(printf,1,2)));
+
+#if defined(LIBGO_SYS_Unix)
+# define GCC_FORMAT_CHECK __attribute__((format(printf,1,2)))
+#else
+# define GCC_FORMAT_CHECK
+#endif
+std::string Format(const char* fmt, ...) GCC_FORMAT_CHECK;
+std::string P(const char* fmt, ...) GCC_FORMAT_CHECK;
 std::string P();
 
 class ErrnoStore {
 public:
-    ErrnoStore() : errno_(errno), restored_(false) {}
+    ErrnoStore() : restored_(false) {
+#if defined(LIBGO_SYS_Windows)
+		wsaErr_ = WSAGetLastError();
+#endif
+		errno_ = errno;
+	}
     ~ErrnoStore() {
         Restore();
     }
     void Restore() {
         if (restored_) return ;
         restored_ = true;
+#if defined(LIBGO_SYS_Windows)
+		WSASetLastError(wsaErr_);
+#endif
         errno = errno_;
     }
 private:
     int errno_;
+#if defined(LIBGO_SYS_Windows)
+	int wsaErr_;
+#endif
     bool restored_;
 };
 
@@ -189,9 +227,9 @@ extern std::mutex gDbgLock;
         if (UNLIKELY(::co::CoroutineOptions::getInstance().debug & (type))) { \
             ::co::ErrnoStore es; \
             std::unique_lock<std::mutex> lock(::co::gDbgLock); \
-            fprintf(::co::CoroutineOptions::getInstance().debug_output, "[%s][%05d][%04d]%s:%d:(%s)\t " fmt "\n", \
-                    ::co::GetCurrentTime().c_str(),\
-                    ::co::GetCurrentProcessID(), ::co::GetCurrentThreadID(), \
+            fprintf(::co::CoroutineOptions::getInstance().debug_output, "[%s][%05d][%04d][%06d]%s:%d:(%s)\t " fmt "\n", \
+                    ::co::GetCurrentTimeStr().c_str(),\
+                    ::co::GetCurrentProcessID(), ::co::GetCurrentThreadID(), ::co::GetCurrentCoroID(), \
                     ::co::BaseFile(__FILE__), __LINE__, __FUNCTION__, ##__VA_ARGS__); \
             fflush(::co::CoroutineOptions::getInstance().debug_output); \
         } \

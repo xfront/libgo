@@ -8,6 +8,7 @@
 namespace co
 {
 
+#if defined(LIBGO_SYS_Unix) && __x86_64__ == 1
 class FastSteadyClock
 {
 public:
@@ -80,5 +81,13 @@ private:
         return ((uint64_t)high << 32) | low;
     }
 };
+#else
+class FastSteadyClock
+	: public std::chrono::steady_clock
+{
+public:
+	static void ThreadRun() {}
+};
+#endif
 
 } // namespace co

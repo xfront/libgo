@@ -45,6 +45,7 @@ public:
     //          如果maxThreadNumber大于minThreadNumber, 则当协程产生长时间阻塞时,
     //          可以自动扩展调度线程数.
     void Start(int minThreadNumber = 1, int maxThreadNumber = 0);
+    void goStart(int minThreadNumber = 1, int maxThreadNumber = 0);
     static const int s_ulimitedMaxThreadNumber = 40960;
 
     // 停止调度 
@@ -72,6 +73,10 @@ public:
 public:
     inline TimerType & GetTimer() { return timer_ ? *timer_ : StaticGetTimer(); }
 
+    inline bool IsStop() { return stop_; }
+
+    static bool& IsExiting();
+
 private:
     Scheduler();
     ~Scheduler();
@@ -84,7 +89,7 @@ private:
     static void DeleteTask(RefObject* tk, void* arg);
 
     // 将一个协程加入可执行队列中
-    void AddTaskRunnable(Task* tk);
+    void AddTask(Task* tk);
 
     // dispatcher线程函数
     // 1.根据待执行协程计算负载, 将高负载的P中的协程steal一些给空载的P
@@ -109,42 +114,13 @@ private:
     int minThreadNumber_ = 1;
     int maxThreadNumber_ = 1;
 
-    std::shared_ptr<bool> stop_;
+    std::thread dispatchThread_;
 
-    // ------------- 兼容旧版架构接口 -------------
-public:
-//    // 调度器调度函数, 内部执行协程、调度协程
-//    uint32_t Run();
-//
-//    // 循环Run直到没有协程为止
-//    // @loop_task_count: 不计数的常驻协程.
-//    //    例如：loop_task_count == 2时, 还剩最后2个协程的时候这个函数就会return.
-//    // @remarks: 这个接口会至少执行一次Run.
-//    void RunUntilNoTask(uint32_t loop_task_count = 0);
-//    
-//    // 无限循环执行Run
-//    void RunLoop();
-//
-//    /// sleep switch
-//    //  \timeout_ms min value is 0.
-//    void SleepSwitch(int timeout_ms);
-//
-//    /// ------------------------------------------------------------------------
-//    // @{ 定时器
-//    template <typename DurationOrTimepoint>
-//    TimerId ExpireAt(DurationOrTimepoint const& dur_or_tp, CoTimer::fn_t const& fn)
-//    {
-//        TimerId id = timer_mgr_.ExpireAt(dur_or_tp, fn);
-//        DebugPrint(dbg_timer, "add timer id=%llu", (long long unsigned)id->GetId());
-//        return id;
-//    }
-//
-//    bool CancelTimer(TimerId timer_id);
-//    bool BlockCancelTimer(TimerId timer_id);
-//    // }@
-//    /// ------------------------------------------------------------------------
+    std::thread timerThread_;
 
-    // --------------------------------------------
+    std::mutex stopMtx_;
+
+    bool stop_ = false;
 };
 
 } //namespace co

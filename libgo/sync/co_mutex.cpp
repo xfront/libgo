@@ -4,75 +4,51 @@
 namespace co
 {
 
-CoMutex::CoMutex() : isLocked_(false)
+CoMutex::CoMutex()
 {
+    sem_ = 1;
 }
 
 CoMutex::~CoMutex()
 {
-    assert(lock_.try_lock());
-    assert(queue_.empty());
-    assert(!isLocked_);
+//    assert(lock_.try_lock());
 }
 
 void CoMutex::lock()
 {
-    std::unique_lock<LFLock> lock(lock_);
-    if (!isLocked_) {
-        isLocked_ = true;
+    if (--sem_ == 0)
+        return ;
+
+    std::unique_lock<lock_t> lock(lock_);
+    if (notified_) {
+        notified_ = false;
         return ;
     }
-
-    if (Processer::IsCoroutine()) {
-        // 协程
-        queue_.push(Processer::Suspend());
-        lock.unlock();
-        Processer::StaticCoYield();
-    } else {
-        // 原生线程
-        queue_.push(Processer::SuspendEntry{});
-        cv_.wait(lock);
-    }
+    cv_.wait(lock);
 }
 
 bool CoMutex::try_lock()
 {
-    std::unique_lock<LFLock> lock(lock_);
-    if (!isLocked_) {
-        isLocked_ = true;
+    if (--sem_ == 0)
         return true;
-    }
+
+    ++sem_;
     return false;
 }
 
 bool CoMutex::is_lock()
 {
-    std::unique_lock<LFLock> lock(lock_);
-    return isLocked_;
+    return sem_ < 1;
 }
 
 void CoMutex::unlock()
 {
-    std::unique_lock<LFLock> lock(lock_);
-    assert(isLocked_);
-    
-    while (!queue_.empty()) {
-        auto entry = queue_.front();
-        queue_.pop();
+    if (++sem_ == 1)
+        return ;
 
-        if (entry) {
-            // 协程
-            if (Processer::Wakeup(entry))
-                return ;
-        } else {
-            // 原生线程
-            cv_.notify_one();
-            return ;
-        }
-    }
-
-    isLocked_ = false;
-    return ;
+    std::unique_lock<lock_t> lock(lock_);
+    if (!cv_.notify_one())
+        notified_ = true;
 }
 
 } //namespace co

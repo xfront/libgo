@@ -37,6 +37,8 @@ struct Task
 
     uint64_t yieldCount_ = 0;
 
+    atomic_t<uint64_t> suspendId_ {0};
+
     Task(TaskF const& fn, std::size_t stack_size);
     ~Task();
 
@@ -44,10 +46,10 @@ struct Task
     {
         ctx_.SwapIn();
     }
-    ALWAYS_INLINE void SwapTo(Task* other)
-    {
-        ctx_.SwapTo(other->ctx_);
-    }
+    //ALWAYS_INLINE void SwapTo(Task* other)
+    //{
+    //    ctx_.SwapTo(other->ctx_);
+    //}
     ALWAYS_INLINE void SwapOut()
     {
         ctx_.SwapOut();
@@ -58,7 +60,7 @@ struct Task
 private:
     void Run();
 
-    static void StaticRun(intptr_t vp);
+    static void FCONTEXT_CALL StaticRun(intptr_t vp);
 
     Task(Task const&) = delete;
     Task(Task &&) = delete;

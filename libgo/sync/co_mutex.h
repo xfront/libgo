@@ -2,7 +2,7 @@
 #include "../common/config.h"
 #include "../scheduler/processer.h"
 #include <queue>
-#include <condition_variable>
+#include "co_condition_variable.h"
 
 namespace co
 {
@@ -10,12 +10,12 @@ namespace co
 /// 协程锁
 class CoMutex
 {
-    LFLock lock_;
-    std::queue<Processer::SuspendEntry> queue_;
-    bool isLocked_;
+    typedef std::mutex lock_t;
+    lock_t lock_;
+    bool notified_ = false;
+    ConditionVariableAny cv_;
 
-    // 兼容原生线程
-    std::condition_variable_any cv_;
+    std::atomic_long sem_;
 
 public:
     CoMutex();

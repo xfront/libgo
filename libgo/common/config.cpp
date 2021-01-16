@@ -14,8 +14,10 @@
 
 namespace co {
 
-#if defined(LIBGO_SYS_Linux)
-ATTRIBUTE_WEAK extern void initHook();
+#if ENABLE_HOOK
+  #if defined(LIBGO_SYS_Linux) || defined(LIBGO_SYS_Windows)
+    extern void initHook();
+  #endif
 #endif
 
 static int staticInitialize()
@@ -24,13 +26,15 @@ static int staticInitialize()
     TaskRefInit(Affinity);
     TaskRefInit(Location);
     TaskRefInit(DebugInfo);
-    TaskRefInit(SuspendId);
+//    TaskRefInit(SuspendId);
 
     // cls
     TaskRefInit(ClsMap);
 
-#if defined(LIBGO_SYS_Linux)
+#if ENABLE_HOOK
+  #if defined(LIBGO_SYS_Linux) || defined(LIBGO_SYS_Windows)
     initHook();
+  #endif
 #endif
     return 0;
 }
@@ -76,7 +80,13 @@ int GetCurrentThreadID()
     return proc ? proc->Id() : -1;
 }
 
-std::string GetCurrentTime()
+int GetCurrentCoroID()
+{
+    Task* tk = Processer::GetCurrentTask();
+    return tk ? tk->id_ : 0;
+}
+
+std::string GetCurrentTimeStr()
 {
 #if defined(LIBGO_SYS_Unix)
     struct tm local;
@@ -111,7 +121,11 @@ const char* PollEvent2Str(short int event)
 }
 unsigned long NativeThreadID()
 {
+#if defined(LIBGO_SYS_Unix)
     return reinterpret_cast<unsigned long>(pthread_self());
+#else
+	return (unsigned long)GetCurrentThreadId();
+#endif
 }
 
 std::string Format(const char* fmt, ...)
